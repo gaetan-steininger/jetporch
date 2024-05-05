@@ -135,7 +135,7 @@ impl IsAction for ExternalAction {
                 };
 
                 let should_mark_changed = match self.changed_when.is_none() {
-                    true => true,
+                    true => get_changed_from_module_output(map_data.clone()),
                     false => {
                         let condition = self.changed_when.as_ref().unwrap();
                         handle.template.test_condition_with_extra_data(request, TemplateMode::Strict, condition, &handle.host, map_data.clone())?
@@ -189,3 +189,13 @@ fn save_results(host: &Arc<RwLock<Host>>, key: &String, map_data: serde_yaml::Ma
     host.write().unwrap().update_variables(result);
 }
 
+fn get_changed_from_module_output(map_data: serde_yaml::Mapping) -> bool {
+    for (k, v) in &map_data {
+        let key: String = serde_yaml::from_value(k.clone()).unwrap();
+        if key == "changed" {
+            let value: bool = serde_yaml::from_value(v.clone()).unwrap();
+            return value;
+        }
+    }
+    true
+}
