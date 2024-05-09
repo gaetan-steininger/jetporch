@@ -28,24 +28,13 @@ pub struct EvaluatedTask {
 }
 
 pub trait IsTask : Send + Sync { 
-
     fn get_module(&self) -> String;
     fn get_name(&self) -> Option<String>;
     fn get_with(&self) -> Option<PreLogicInput>;
-    
+
     fn evaluate(&self, handle: &Arc<TaskHandle>, request: &Arc<TaskRequest>, tm: TemplateMode) -> Result<EvaluatedTask, Arc<TaskResponse>>;
-
-    fn get_display_name(&self) -> String {
-        return match self.get_name() {
-            Some(x) => x,
-            _ => self.get_module()
-        }
-    }
-
 }
 
 pub trait IsAction : Send + Sync {
-
     fn dispatch(&self, handle: &Arc<TaskHandle>, request: &Arc<TaskRequest>) -> Result<Arc<TaskResponse>, Arc<TaskResponse>>;
 }
-
