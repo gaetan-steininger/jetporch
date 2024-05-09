@@ -27,14 +27,15 @@ use crate::connection::command::Forward;
 use crate::connection::local::convert_out;
 use std::process::Command;
 use std::sync::{Arc,Mutex,RwLock};
-use ssh2::Session;
+use ssh2::{Session, CheckResult};
+use ssh2::KnownHostFileKind;
 use std::io::{Read,Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::time::Duration;
 use std::net::ToSocketAddrs;
 use std::fs::File;
-//use std::io;
+use std::env;
 use std::io;
 
 // implementation for both Ssh Connections and the Ssh Connection factory
@@ -171,21 +172,28 @@ impl Connection for SshConnection {
         let connect_str = format!("{host}:{port}", host=self.hostname, port=self.port.to_string());
         // connect with timeout requires SocketAddr objects instead of just connection strings
         let addrs_iter = connect_str.as_str().to_socket_addrs();
-        
+
         // check for errors
         let mut addrs_iter2 = match addrs_iter { Err(_x) => { return Err(String::from("unable to resolve")); }, Ok(y) => y };
         let addr = addrs_iter2.next();
         if ! addr.is_some() { return Err(String::from("unable to resolve(2)"));  }
-        
+
         // actually connect (finally) here
         let tcp = match TcpStream::connect_timeout(&addr.unwrap(), seconds) { Ok(x) => x, _ => { 
             return Err(format!("SSH connection attempt failed for {}:{}", self.hostname, self.port)); } };
-        
+
         // new session & handshake
         let mut sess = match Session::new() { Ok(x) => x, _ => { return Err(String::from("SSH session failed")); } };
         sess.set_tcp_stream(tcp);
         match sess.handshake() { Ok(_) => {}, _ => { return Err(String::from("SSH handshake failed")); } } ;
-        
+
+        match SshConnection::check_known_host(&sess, &self.hostname) {
+            Ok(_) => {},
+            Err(x) => {
+                return Err(x);
+            }
+        };
+
         if self.login_password.is_some() {
             match sess.userauth_password(&self.username.clone(), self.login_password.clone().unwrap().as_str()) {
                 Ok(_) => {},
@@ -209,7 +217,7 @@ impl Connection for SshConnection {
                 }
             };
         }
-        
+
         if self.key.is_none() && self.login_password.is_none() {
             if self.key_comment.is_some() {
                 // use this specific SSH key
@@ -262,7 +270,7 @@ impl Connection for SshConnection {
         }
 
         if !(sess.authenticated()) { return Err("failed to authenticate".to_string()); };
-      
+
         // OS detection -- always run uname -a on first connect so we know the OS type, which will allow the command library and facts
         // module to work correctly.
 
@@ -370,6 +378,30 @@ impl Connection for SshConnection {
 }
 
 impl SshConnection {
+
+    fn check_known_host(session: &Session, host: &str) -> Result<(), String>{
+        let mut known_hosts = session.known_hosts().unwrap();
+
+        // Initialize the known hosts with a global known hosts file
+        let file = Path::new(&env::var("HOME").unwrap()).join(".ssh/known_hosts");
+        known_hosts.read_file(&file, KnownHostFileKind::OpenSSH).unwrap();
+
+        // Now check to see if the seesion's host key is anywhere in the known hosts file
+        let (key, key_type) = session.host_key().unwrap();
+        match known_hosts.check(host, key) {
+            CheckResult::Match => return Ok(()), // all good!
+            CheckResult::NotFound => {}   // ok, we'll add it
+            CheckResult::Mismatch => return Err(String::from("SSH server key mismatch, man in the middle attack?!")),
+            CheckResult::Failure => return Err(String::from("failed to check the known hosts")),
+        }
+
+        println!("adding {} SSH server key to the known hosts", &host);
+
+        known_hosts.add(host, key, host, key_type.into()).unwrap();
+        known_hosts.write_file(&file, KnownHostFileKind::OpenSSH).unwrap();
+
+        return Ok(());
+    }
 
     fn trim_newlines(&self, s: &mut String) {
         if s.ends_with('\n') {
